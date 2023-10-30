@@ -1,0 +1,49 @@
+## Empty
+/dev/root        30297152 16364644  13916124  55% /
+
+## 전부 (vec 제외)
+Filesystem      1K-blocks     Used Available Use% Mounted on
+/dev/root        30297152 21969916   8310852  73% /
+
++5605272 kB
+ = 5.6 GB
+
+## 전부 + 종합 (pickle)    (vec 제외)
+/dev/root        30297152 23229836   7050932  77% /
+
++ 6865192 kB
+ = 6.8 GB
+
+(종합 * 54만줄 = 1기가 정도)  
+그렇게 크진 않아보임
+
+## 전부 + 종합 (json)    (vec 제외)
+Filesystem      1K-blocks     Used Available Use% Mounted on
+/dev/root        30297152 26752076   3528692  89% /
+10387432 kB
+= 10.3 GB
+
+json은 용량이 2배 가까이임.
+그냥 pickle로 넣자.
+
+--------------
+
+1.6M  news_old 넣으면  20GB까지 갈듯
+
+==============================
+
+Filesystem      1K-blocks     Used Available Use% Mounted on
+/dev/root        30297152 11188040  19092728  37% /
+
+Filesystem      1K-blocks     Used Available Use% Mounted on
+/dev/root        30297152 18052968  12227800  60% /
+
+
+########################
+
+종합 을 꺼내나,
+요소들을 꺼내서 dict로 종합하나
+걸리는 시간 똑같음.
+
+종합 안해도 될듯.
+
