@@ -16,11 +16,14 @@ import hanja
 import numpy as np
 from normalize_text import normalize_regex_kykim
 import torch
+import pytz
+import logging
+
 
 ####### transformer #######
 
-tokenizer = BertTokenizer.from_pretrained("/home/ubuntu/projects/SHIP_search/datas/test_tokenizer")
-ctx_encoder = BertModel.from_pretrained("/home/ubuntu/projects/SHIP_search/datas/test_ctx_model")
+# tokenizer = BertTokenizer.from_pretrained("/home/donga/projects/SHIP_search/donga_qppp_late_25k_shfpos_t4_absolute_random_bracket_s512_b8/test_tokenizer")
+# ctx_encoder = BertModel.from_pretrained("/home/donga/projects/SHIP_search/donga_qppp_late_25k_shfpos_t4_absolute_random_bracket_s512_b8/test_ctx_model")
 #################################
 
 class NoDataException(Exception):
@@ -36,13 +39,18 @@ def online_check(title0):
     return False
 
 def mysql_updater(clean0):
+    print('업데이트 시작')
+    # 업데이트 할때만 메모리에 올라가도록
+    tokenizer = BertTokenizer.from_pretrained("/home/donga/projects/SHIP_search/donga_qppp_late_25k_shfpos_t4_absolute_random_bracket_s512_b8/test_tokenizer")
+    ctx_encoder = BertModel.from_pretrained("/home/donga/projects/SHIP_search/donga_qppp_late_25k_shfpos_t4_absolute_random_bracket_s512_b8/test_ctx_model")
 
     today0 = date.today()
 
     articles = []
     api_dic = {}
-    for n in range(3):  # 수정, 삭제는 이틀치를 확인해야 하기떄문에 이틀치 긁어옴.
+    for n in range(5,-1,-1):  # 3,2,1,0
         day0 = today0 - timedelta(days=n)  # 어제(n=1), 오늘(n=0)
+        print(day0)
         url = f'https://openapi.donga.com/newsList?p={day0.strftime("%Y%m%d")}'
         temp = requests.get(url)
         temp = json.loads(temp.content)
@@ -51,11 +59,8 @@ def mysql_updater(clean0):
             print('### NoDataException ###')
             raise NoDataException()
         articles += temp['data']
-    for ar in articles:
-        # api_dic[ar['gid']] = ar['title']   ### 제목 수정 에서 쓸  딕셔너리.
-        api_dic[f"{ar['gid']}_0"] ={'title':ar['title'], 'thumburl':ar['thumburl']}
 
-    if len([*api_dic]) ==0:
+    if len(articles) ==0:
         print('### ZeroDataException ###')
         raise ZeroDataException
 
@@ -68,19 +73,27 @@ def mysql_updater(clean0):
     cursor.execute("""
     select gid from news_gpt.news_recent
     """)
-    keys = np.array(cursor.fetchall()).reshape(1,-1)[0]
-    before_count = len(keys)
+    already = np.array(cursor.fetchall()).reshape(1,-1)[0]
+    before_count = len(already)
     num_recieve = len(articles)  # api로 받은 숫자
+
+    already = list(map(lambda x:x[:-2], already)) # '_0' 떼기
+    already = list(set(already)) #중복 제거
+    num_original = len(already) # 쪼개기 전 숫자
+
     num_deal = 0  # 실제 처리대상 숫자.. 
     num_doc2vec = 0  # doc2vec 처리돼 redis와 mysql에 들어간 숫자.
     write_ars = [] # 등록할 기사 목록
     for ar in articles:
-        gid = f"{ar['gid']}_0"
-        if gid not in keys:  ## api에서 받은 게 mysql 에 없다면
-            content = ar["content"]
+        gid_ori = ar['gid']
+        content = ar["content"]
+        if ar['source'] in ['동아일보', '동아닷컴', '신동아', '주간동아', '여성동아', '스포츠동아'] and len(content) > 500 :
+            if gid_ori not in already:  ## api에서 받은 게 mysql 에 없다면 (gid_origin 비교하는거임)
+                
 
-            if ar['source'] in ['동아일보','동아닷컴','스포츠동아','경제뉴스','어린이동아','어린이동아','게임동아','여성동아','신동아','주간동아','에듀동아','뉴스1','뉴시스(웹)'] and len(content) > 500:
-                title = ar['title'].replace('"', '“')
+            # if ar['source'] in ['동아일보','동아닷컴','스포츠동아','경제뉴스','어린이동아','어린이동아','게임동아','여성동아','신동아','주간동아','에듀동아','뉴스1','뉴시스(웹)'] and len(content) > 500:
+            
+                title = ar['title']#.replace('"', '“')
 
                 if (online_check(title) and ar['ispublish'] == '1') or (
                         '서영아의100세카페' in title.replace(' ', '') and ar['ispublish'] == '0'):
@@ -91,55 +104,69 @@ def mysql_updater(clean0):
     if len(write_ars) > 0:
         # 모델 : ctx_model
         for ar in write_ars:
-            num_deal += 1
-            title = ar['title'].replace('"', '“')
-            num_doc2vec +=1
-            if clean0:
-                print('\n============')
-                clean0 = False
-            print(f"기사 등록 : {ar['gid']}_0 / {title} / {ar['url']}")
-            content = re.sub(r'\.com$','', ar['content'].strip())
-            temp = re.split(r'\.(?=[^.]*$)', content)
-            if len(temp) >1:
-                content, press = temp
-            else:
-                content, press = temp[0], 'unknown'
+
+            #################################################
             
+            title_ori = ar['title']#.replace('"', '“') 한자변환 안한 제목
+
+            content = re.sub(r'\.com$','', ar['content'].strip())
+            content = normalize_regex_kykim(content).replace('  ',' ')
+            title = ar['title']
+            title = normalize_regex_kykim(title).replace('  ',' ')
+            if re.search(r'[^ㄱ-ㅎ가-힣a-zA-Z0-9…·##μ●▲▶\'!$%&()*+,./:;<=>?@\^`{|}~∼％"\[\]\s-]', content):
+                content = hanja.translate(content,'substitution')
+            if re.search(r'[^ㄱ-ㅎ가-힣a-zA-Z0-9…·##μ●▲▶\'!$%&()*+,./:;<=>?@\^`{|}~∼％"\[\]\s-]', title):
+                title = hanja.translate(title,'substitution')
+            
+
             createtime = datetime.strptime(ar['createtime'], '%Y-%m-%d %H:%M:%S') - timedelta(hours=5)
 
-            ########## Normalizing -> Embedding ############
+            #쪼개기
+            count0 = len(content)//800 #조각 수
+            if count0 ==0:
+                count0=1   
+                # 800자 미만인건 그거만.
+                # 800자 이상인건, 다음 블록 중 800자 이상인거만.
 
-            ctx = f"<제목> {title} <작성일> {createtime.year}년 {createtime.month}월 {createtime.day}일 <본문> {content}"[:805]
-            ctx = normalize_regex_kykim(ctx).replace('  ',' ')
+            for i in range(count0):
+                num_deal += 1
+                num_doc2vec +=1
 
-            if re.search(r'[^ㄱ-ㅎ가-힣a-zA-Z0-9…·##μ●▲▶\'!$%&()*+,./:;<=>?@\^`{|}~∼％"-]', ctx):
-                ctx = hanja.translate(ctx,'substitution')
+                api_dic[f"{ar['gid']}_{i}"] ={'title': title_ori, 'thumburl':ar['thumburl']}
 
-            ctx = re.sub('\s[^\.\s]*$','',ctx)  #  . \s 로 끝나지 않는다면, 마지막 \s 이후의 글자를 모두 지움. 단어가 중간에 잘리는 일이 없도록 하기 위함.
-                # title 은 한자 그대로 입력됨. ctx에 들어가는 title만 한자 번역됨.
-            
-            ## embedding
-            with torch.no_grad():
-                a = tokenizer(ctx, max_length=512, padding='max_length',truncation=True, return_tensors='pt')
-                vec = ctx_encoder(**a)[0][:,0,:]
-            vec = np.array(vec)
-            vec = np.reshape(vec,(-1,))  # (1,768) 을 (768,) 로 만들어줌.  dtype= float32
-            #########################
+                con = content[i*800 :(i+1)*800 + 15]
+                if i!=0:
+                    con = '…' + re.sub('^[^\s]+\s','',con) # 앞에 자르고
+                ctx = f"<제목> {title} <작성일> {createtime.year}년 {createtime.month}월 {createtime.day}일 <본문> {con}"[:805] 
+                ctx = re.sub('\s[^\.\s]*$','',ctx) #뒤에 자르고
+                ctx += '…'
 
-            # mysql에 넣기
-            cursor.execute(f"""insert ignore into news_gpt.news_recent values(
-                "{ar['gid']}_0",
-                "{ar['createtime']}",
-                %s,
-                %s,
-                %s,
-                "{ar['url']}",
-                "{ar['thumburl']}",
-                "{ar['source']}",
-                "{ar['cate_code']}",
-                %s
-                )""", (title.replace(' ',''), title, ctx.encode('utf-8'), vec.tobytes()))
-                # 벡터를 mysql에도 저장. 인출떄는  np.array(json.loads(cursor.fetchall()[0][0]))
+                print(f"기사 등록 : {ar['gid']}_{i} / {title_ori} / {ar['url']}")
+
+
+                ## embedding
+                with torch.no_grad():
+                    a = tokenizer(ctx, max_length=512, padding='max_length',truncation=True, return_tensors='pt')
+                    vec = ctx_encoder(**a)[0][:,0,:]
+                vec = np.array(vec)
+                vec = np.reshape(vec,(-1,))  # (1,768) 을 (768,) 로 만들어줌.  dtype= float32
+                #########################
+
+                # mysql에 넣기
+                cursor.execute(f"""insert ignore into news_gpt.news_recent values(
+                    "{ar['gid']}_{i}",
+                    "{ar['createtime']}",
+                    %s,
+                    %s,
+                    %s,
+                    "{ar['url']}",
+                    "{ar['thumburl']}",
+                    "{ar['source']}",
+                    "{ar['cate_code']}",
+                    %s
+                    )""", (title_ori.replace(' ',''), title_ori, ctx.encode('utf-8'), vec.tobytes()))
+                    # 벡터를 mysql에도 저장. 인출떄는  np.array(json.loads(cursor.fetchall()[0][0]))
+                ###################################################################
         db.commit()
 
     # 2) 기사 수정 및 삭제
@@ -210,35 +237,51 @@ def mysql_updater(clean0):
     """)
     after_count, after_max, after_min = cursor.fetchone()
 
-    return before_count, after_count, after_max, after_min, num_recieve, num_deal, num_doc2vec, num_deleted, num_corrected, clean0
+    return before_count, after_count, after_max, after_min, num_recieve, num_deal, num_doc2vec, num_deleted, num_corrected, clean0, num_original
 
 if __name__ == '__main__':
     import time
     import gc
-    import sys
+    # import sys
+    last= -1
+    korea_timezone = pytz.timezone('Asia/Seoul')
 
     clean0 = True ## 줄바꾸기를 위한 장치.  clean0=True 일 경우 '\r'을 통해 '마지막 수신' 이 같은 자리에 계속 표시되게 함. clean0이 False로 바뀔 때 \n 을 통해 \r 을 지움.
+    print("시작")
     while True:
-        now0 = datetime.now()
-        try:
-            before_count, after_count, after_max, after_min, num_recieve, num_deal, num_doc2vec, num_deleted, num_corrected, clean0 = mysql_updater(clean0)
-            if num_doc2vec !=0 or num_deleted != 0 or num_corrected !=0: #처리한게 하나라도 있으면.
-                if clean0:
-                    print('\n============')
-                    clean0 = False
-                print(f"마지막 업데이트 : {now0} // mysql : {before_count} -> {after_count} // api {num_recieve}개 받아 {num_doc2vec}개 전환// {num_deleted}개 삭제 {num_corrected}개 수정// {after_min} ~ {after_max}")
-                print("============")
-            else:  # 처리한 게 하나도 없을 경우.
-                clean0 =True
-                # print(f"\r마지막 수신 : {now0}",end='')
-                print(f"마지막 수신 : {now0}",end='||')
+        now0 = datetime.now(korea_timezone)
 
-        except NoDataException:
-            pass
-        except ZeroDataException:
-            pass
-        time.sleep(120)
+        if now0.hour == 4  and now0.day != last.day: 
+        # if now0.hour == 19:
+            try:
+                before_count, after_count, after_max, after_min, num_recieve, num_deal, num_doc2vec, num_deleted, num_corrected, clean0, num_original = mysql_updater(clean0)
+                if num_doc2vec !=0 or num_deleted != 0 or num_corrected !=0: #처리한게 하나라도 있으면.
+                    if clean0:
+                        print('\n============')
+                        clean0 = False
+                    print(f"마지막 업데이트 : {now0} // mysql : {before_count} -> {after_count} (split 전 : {num_original}) // api {num_recieve}개 받아 {num_doc2vec}개 전환// {num_deleted}개 삭제 {num_corrected}개 수정// {after_min} ~ {after_max}")
+                    print("============")
+                    
+                    last = now0
+                else:  # 처리한 게 하나도 없을 경우.
+                    clean0 =True
+                    # print(f"마지막 수신 : {now0}",end='||')
+                    print(f"데이터가 없음 (?)")
 
-        sys.stdout.flush()
+
+                # 검색기 업데이트
+                # update_result0 = requests.get('http://13.124.236.0:5100/update?command=update')
+                # results0 = json.loads(update_result0.content)
+                # print(f"검색기 업데이트 결과 : {results0}")
+
+            except NoDataException:
+                pass
+            except ZeroDataException:
+                pass
+        else:
+            print(f"{now0} : 시간안됨")
+        time.sleep(60*30) 
+
+        # sys.stdout.flush()  # 이거때메 로그 안남는듯
         gc.collect()
 

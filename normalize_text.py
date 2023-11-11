@@ -237,7 +237,7 @@ def normalize_regex_kykim(text):
 
     #quote
     text = re.sub(r"['’՚Ꞌꞌ＇'‘’‛`´′‵]", "'", text) # 추가
-    text = re.sub(r'["“”„‟″‶‴‷⁗＂]', '"', text) # 추가
+    text = re.sub(r'["“”„‟″‶‴‷⁗＂˝]', '"', text) # 추가     ˝ 추가됨
     text = re.sub(r"[‚]", ",", text) #ok
     text = re.sub(r"[〓]", "=", text) #ok
     text = re.sub(r"[㎞]", "km", text) #ok
