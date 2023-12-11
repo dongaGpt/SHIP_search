@@ -48,7 +48,7 @@ def mysql_updater(clean0):
 
     articles = []
     api_dic = {}
-    for n in range(5,-1,-1):  # 3,2,1,0
+    for n in range(5,-1,-1):  # 3,2,1,0 ## 5,-1,-1
         day0 = today0 - timedelta(days=n)  # 어제(n=1), 오늘(n=0)
         print(day0)
         url = f'https://openapi.donga.com/newsList?p={day0.strftime("%Y%m%d")}'
@@ -84,10 +84,12 @@ def mysql_updater(clean0):
     num_deal = 0  # 실제 처리대상 숫자.. 
     num_doc2vec = 0  # doc2vec 처리돼 redis와 mysql에 들어간 숫자.
     write_ars = [] # 등록할 기사 목록
+    del_compare = {}  # del_gid 와 비교할 대상.  api에 기사가 있는지 체크하기 위한 목적
     for ar in articles:
         gid_ori = ar['gid']
         content = ar["content"]
         if ar['source'] in ['동아일보', '동아닷컴', '신동아', '주간동아', '여성동아', '스포츠동아'] and len(content) > 500 :
+            del_compare[gid_ori] = ar
             if gid_ori not in already:  ## api에서 받은 게 mysql 에 없다면 (gid_origin 비교하는거임)
                 
 
@@ -170,7 +172,8 @@ def mysql_updater(clean0):
         db.commit()
 
     # 2) 기사 수정 및 삭제
-
+    db = mysql.connector.connect(**config)
+    cursor = db.cursor()
     cursor.execute(
         f"""
         select gid, title, createtime, thumburl from news_gpt.news_recent where createtime >="{today0 - timedelta(days=1)}" and createtime < "{today0 + timedelta(days=1)}" 
@@ -185,27 +188,28 @@ def mysql_updater(clean0):
     correct_thumburl = {}
     for gid in mysql_dic:
         # print(mysql_dic[gid][1], end=' ')
-        if gid not in [*api_dic]:  ## mysql에 있는 gid가 api에는 없는경우  ==> 삭제
+        gid_ori = gid.split('_')[0]
+        if gid_ori not in del_compare:  ## mysql에 있는 gid가 api에는 없는경우  ==> 삭제
             #삭제할거
             if clean0:
                 print('\n============')
                 clean0 = False
             del_gid.append(gid)
-            print(f"삭제 : {gid} / {mysql_dic[gid][0]}")
+            print(f"삭제 : {gid} / {mysql_dic[gid][0]}/ {mysql_dic[gid][1]}")
 
-        elif api_dic[gid]['title'] != mysql_dic[gid][0]:  # gid가 있긴 한데 title이 다를 경우 ==> 수정
+        elif del_compare[gid_ori]['title'] != mysql_dic[gid][0]:  # gid가 있긴 한데 title이 다를 경우 ==> 수정
             if clean0:
                 print('\n============')
                 clean0 = False
-            print(f"제목 수정 : {gid} / {mysql_dic[gid][0]} => {api_dic[gid]['title']}  ")
-            correct_title[gid] = api_dic[gid]['title']
+            print(f"제목 수정 : {gid} / {mysql_dic[gid][0]} => {del_compare[gid_ori]['title']}  ")
+            correct_title[gid] = del_compare[gid_ori]['title']
 
-        elif api_dic[gid]['thumburl'] != mysql_dic[gid][2]:  # gid가 있긴 한데 title이 다를 경우 ==> 수정
+        elif del_compare[gid_ori]['thumburl'] != mysql_dic[gid][2]:  # gid가 있긴 한데 title이 다를 경우 ==> 수정
             if clean0:
                 print('\n============')
                 clean0 = False
-            print(f"썸네일url 수정 : {gid} / {mysql_dic[gid][2]} => {api_dic[gid]['thumburl']}  ")
-            correct_thumburl[gid] = api_dic[gid]['thumburl']
+            print(f"썸네일url 수정 : {gid} / {mysql_dic[gid][2]} => {del_compare[gid_ori]['thumburl']}  ")
+            correct_thumburl[gid] = del_compare[gid_ori]['thumburl']
             
         else:
             # print("이상없음")
@@ -215,9 +219,11 @@ def mysql_updater(clean0):
     num_corrected = len(*[correct_title]) + len(*[correct_thumburl]) # 수정 수
     ## 삭제  실행
     if len(del_gid) >0:
+        print(del_gid)
+
         cursor.execute(
             f"""
-                delete from news_gpt.news_recent where gid in ({','.join(del_gid)})
+                delete from news_gpt.news_recent where gid in ({','.join(del_gid)});
                 """
         )
 
@@ -243,7 +249,7 @@ if __name__ == '__main__':
     import time
     import gc
     # import sys
-    last= -1
+    last= datetime(2000,1,1)
     korea_timezone = pytz.timezone('Asia/Seoul')
 
     clean0 = True ## 줄바꾸기를 위한 장치.  clean0=True 일 경우 '\r'을 통해 '마지막 수신' 이 같은 자리에 계속 표시되게 함. clean0이 False로 바뀔 때 \n 을 통해 \r 을 지움.
@@ -270,9 +276,9 @@ if __name__ == '__main__':
 
 
                 # 검색기 업데이트
-                # update_result0 = requests.get('http://13.124.236.0:5100/update?command=update')
-                # results0 = json.loads(update_result0.content)
-                # print(f"검색기 업데이트 결과 : {results0}")
+                update_result0 = requests.get('http://10.0.203.159:5100/update?command=update')
+                results0 = json.loads(update_result0.content)
+                print(f"검색기 업데이트 결과 : {results0}")
 
             except NoDataException:
                 pass
